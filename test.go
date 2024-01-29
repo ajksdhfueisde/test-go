@@ -1,72 +1,50 @@
-package main
-
-import (
-    "io"
-    "log"
-    "net"
-    "net/http"
-    "time"
-)
-
-func handleTunneling(w http.ResponseWriter, r *http.Request) {
-    destConn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusServiceUnavailable)
-        return
-    }
-    w.WriteHeader(http.StatusOK)
-    hijacker, ok := w.(http.Hijacker)
-    if !ok {
-        http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
-        return
-    }
-    clientConn, _, err := hijacker.Hijack()
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusServiceUnavailable)
-    }
-    go transfer(destConn, clientConn)
-    go transfer(clientConn, destConn)
-}
-
-func transfer(destination io.WriteCloser, source io.ReadCloser) {
-    defer destination.Close()
-    defer source.Close()
-    io.Copy(destination, source)
-}
-
-func handleHTTP(w http.ResponseWriter, req *http.Request) {
-    resp, err := http.DefaultTransport.RoundTrip(req)
-    if err != nil {
-        http.Error(w, err.Error(), http.StatusServiceUnavailable)
-        return
-    }
-    defer resp.Body.Close()
-    copyHeader(w.Header(), resp.Header)
-    w.WriteHeader(resp.StatusCode)
-    io.Copy(w, resp.Body)
-}
-
-func copyHeader(dst, src http.Header) {
-    for k, vv := range src {
-        for _, v := range vv {
-            dst.Add(k, v)
-        }
-    }
-}
-
-func main() {
-    server := &http.Server{
-        Addr: ":8888",
-        Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            if r.Method == http.MethodConnect {
-                handleTunneling(w, r)
-            } else {
-                handleHTTP(w, r)
-            }
-        }),
-        // Disable HTTP/2.
-        // TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
-    }
-
-    log.Fatal(server.ListenAndServe())
+package main  
+  
+import (  
+"fmt"  
+"io"  
+"net"  
+"net/http"  
+"strings"  
+)  
+  
+type Pxy struct {  
+}  
+  
+func (p *Pxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {  
+fmt.Printf("Received request %s %s %s\n", req.Method, req.Host, req.RemoteAddr)  
+transport := http.DefaultTransport  
+  
+// step 1，浅拷贝对象，然后就再新增属性数据  
+outReq := new(http.Request)  
+*outReq = *req  
+  
+if clientIP, _, err := net.SplitHostPort(req.RemoteAddr); err == nil {  
+if prior, ok := outReq.Header["X-Forwarded-For"]; ok {  
+clientIP = strings.Join(prior, ", ") + ", " + clientIP  
+}  
+outReq.Header.Set("X-Forwarded-For", clientIP)  
+}  
+// step 2, 请求下游  
+res, err := transport.RoundTrip(outReq)  
+if err != nil {  
+rw.WriteHeader(http.StatusBadGateway)  
+return  
+}  
+// step 3, 把下游请求内容返回给上游  
+for key, value := range res.Header {  
+for _, v := range value {  
+rw.Header().Add(key, v)  
+}  
+}  
+rw.WriteHeader(res.StatusCode)  
+io.Copy(rw, res.Body)  
+res.Body.Close()  
+}  
+  
+func main() {  
+fmt.Println("Serve on :8080")  
+http.Handle("/", &Pxy{})  
+http.ListenAndServe("0.0.0.0:8080", nil)  
+  
 }
