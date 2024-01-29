@@ -4,6 +4,8 @@ from sanic.response import text
 import requests
 import time
 
+app = Sanic("MyHelloWorldApp")
+
 def handle_id(id):
   soundfinder_url = "https://spclient.wg.spotify.com/soundfinder/v1/unauth/episode/{}/com.widevine.alpha?market=SG"
   try:
