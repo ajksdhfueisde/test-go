@@ -41,5 +41,5 @@ def handle_id(id):
 @app.get("/")
 async def handler(request: Request):
     id = request.args.get("id")
-    res = await handle_id(id)
+    res = handle_id(id)
     return text(res)
